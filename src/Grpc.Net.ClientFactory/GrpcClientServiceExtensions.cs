@@ -322,6 +322,9 @@ public static class GrpcClientServiceExtensions
                 if (HttpHandlerFactory.TryCreatePrimaryHandler(out var handler))
                 {
 #if NET5_0_OR_GREATER
+                    // SocketsHttpHandler itself is unsupported on browser, so "handler is SocketsHttpHandler"
+                    // can only be true on platforms where the type is supported - not analyzer-visible though.
+#pragma warning disable CA1416 // SocketsHttpHandler.PooledConnectionLifetime is unsupported on browser
                     if (handler is SocketsHttpHandler socketsHttpHandler)
                     {
                         // A channel is created once per client, lives forever, and the primary handler never changes.
@@ -330,6 +333,7 @@ public static class GrpcClientServiceExtensions
                         // by setting PooledConnectionLifetime to handler lifetime.
                         socketsHttpHandler.PooledConnectionLifetime = options.HandlerLifetime;
                     }
+#pragma warning restore CA1416
 #endif
 
                     b.PrimaryHandler = handler;

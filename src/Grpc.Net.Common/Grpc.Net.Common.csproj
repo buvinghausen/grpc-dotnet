@@ -20,4 +20,12 @@
     <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" />
   </ItemGroup>
 
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+    <SupportedPlatform Include="android" />
+    <SupportedPlatform Include="ios" />
+    <SupportedPlatform Include="maccatalyst" />
+    <SupportedPlatform Include="windows" />
+  </ItemGroup>
+
 </Project>

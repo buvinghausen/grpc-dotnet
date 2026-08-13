@@ -28,4 +28,12 @@
     <ProjectReference Include="..\Grpc.Net.Client\Grpc.Net.Client.csproj" PrivateAssets="None" />
     <PackageReference Include="Microsoft.Extensions.Http" VersionOverride="$(MicrosoftExtensionsLtsPackageVersion)" />
   </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+    <SupportedPlatform Include="android" />
+    <SupportedPlatform Include="ios" />
+    <SupportedPlatform Include="maccatalyst" />
+    <SupportedPlatform Include="windows" />
+  </ItemGroup>
 </Project>

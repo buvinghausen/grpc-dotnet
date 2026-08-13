@@ -17,6 +17,7 @@
 #endregion
 
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using Grpc.Core;
 #if SUPPORT_LOAD_BALANCING
 using Grpc.Net.Client.Balancer;
@@ -292,42 +293,13 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
         if (HttpRequestHelpers.HasHttpHandlerType(channelOptions.HttpHandler, "System.Net.Http.SocketsHttpHandler"))
         {
 #if NET5_0_OR_GREATER
+            // A live SocketsHttpHandler instance can only exist on platforms where SocketsHttpHandler
+            // itself is supported, so CreateSocketsHttpHandlerContext is never reached on browser even
+            // though the analyzer can't prove that from the reflection-based type check above.
+#pragma warning disable CA1416 // SocketsHttpHandler is unsupported on browser
             var socketsHttpHandler = HttpRequestHelpers.GetHttpHandlerType<SocketsHttpHandler>(channelOptions.HttpHandler)!;
-
-            // Check if the SocketsHttpHandler is being shared by channels.
-            // It has already been setup by another channel (i.e. ConnectCallback is set) then
-            // additional channels can use advanced connectivity features.
-            if (!BalancerHttpHandler.IsSocketsHttpHandlerSetup(socketsHttpHandler))
-            {
-                // Someone has already configured the handler callback.
-                // This channel can't support advanced connectivity features.
-                if (socketsHttpHandler.ConnectCallback != null)
-                {
-                    return new HttpHandlerContext(HttpHandlerType.Custom);
-                }
-            }
-
-            // Load balancing has been disabled on the SocketsHttpHandler.
-            if (socketsHttpHandler.Properties.TryGetValue("__GrpcLoadBalancingDisabled", out var value)
-                && value is bool loadBalancingDisabled && loadBalancingDisabled)
-            {
-                return new HttpHandlerContext(HttpHandlerType.Custom);
-            }
-
-            // If a proxy is specified then requests could be sent via an SSL tunnel.
-            // A CONNECT request is made to the proxy to establish the transport stream and then
-            // gRPC calls are sent via stream. This feature isn't supported by load balancer.
-            // Proxy can be specified via:
-            // - SocketsHttpHandler.Proxy. Set via app code.
-            // - HttpClient.DefaultProxy. Set via environment variables, e.g. HTTPS_PROXY.
-            if (IsProxied(socketsHttpHandler, address, isSecure))
-            {
-                logger.LogInformation("Proxy configuration is detected. How the gRPC client creates connections can cause unexpected behavior when a proxy is configured. " +
-                    "To ensure the client correctly uses a proxy, configure GrpcChannelOptions.HttpHandler to use HttpClientHandler. " +
-                    "Note that HttpClientHandler isn't compatible with load balancing.");
-            }
-
-            return new HttpHandlerContext(HttpHandlerType.SocketsHttpHandler, socketsHttpHandler.ConnectTimeout, GetConnectionIdleTimeout(socketsHttpHandler));
+            return CreateSocketsHttpHandlerContext(socketsHttpHandler, logger, address, isSecure);
+#pragma warning restore CA1416
 #else
             return new HttpHandlerContext(HttpHandlerType.SocketsHttpHandler);
 #endif
@@ -338,8 +310,53 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
         }
 
         return new HttpHandlerContext(HttpHandlerType.Custom);
+    }
 
 #if NET5_0_OR_GREATER
+    private static readonly Uri HttpLoadBalancerTemporaryUri = new Uri("http://loadbalancer.temporary.invalid");
+    private static readonly Uri HttpsLoadBalancerTemporaryUri = new Uri("https://loadbalancer.temporary.invalid");
+
+    // SocketsHttpHandler itself is unsupported on browser, so everything below is too. See the call
+    // site in CalculateHandlerContext for why this is safe: it's never reached without a live
+    // SocketsHttpHandler instance, which can't exist on browser.
+    [UnsupportedOSPlatform("browser")]
+    private static HttpHandlerContext CreateSocketsHttpHandlerContext(SocketsHttpHandler socketsHttpHandler, ILogger logger, Uri address, bool isSecure)
+    {
+        // Check if the SocketsHttpHandler is being shared by channels.
+        // It has already been setup by another channel (i.e. ConnectCallback is set) then
+        // additional channels can use advanced connectivity features.
+        if (!BalancerHttpHandler.IsSocketsHttpHandlerSetup(socketsHttpHandler))
+        {
+            // Someone has already configured the handler callback.
+            // This channel can't support advanced connectivity features.
+            if (socketsHttpHandler.ConnectCallback != null)
+            {
+                return new HttpHandlerContext(HttpHandlerType.Custom);
+            }
+        }
+
+        // Load balancing has been disabled on the SocketsHttpHandler.
+        if (socketsHttpHandler.Properties.TryGetValue("__GrpcLoadBalancingDisabled", out var value)
+            && value is bool loadBalancingDisabled && loadBalancingDisabled)
+        {
+            return new HttpHandlerContext(HttpHandlerType.Custom);
+        }
+
+        // If a proxy is specified then requests could be sent via an SSL tunnel.
+        // A CONNECT request is made to the proxy to establish the transport stream and then
+        // gRPC calls are sent via stream. This feature isn't supported by load balancer.
+        // Proxy can be specified via:
+        // - SocketsHttpHandler.Proxy. Set via app code.
+        // - HttpClient.DefaultProxy. Set via environment variables, e.g. HTTPS_PROXY.
+        if (IsProxied(socketsHttpHandler, address, isSecure))
+        {
+            logger.LogInformation("Proxy configuration is detected. How the gRPC client creates connections can cause unexpected behavior when a proxy is configured. " +
+                "To ensure the client correctly uses a proxy, configure GrpcChannelOptions.HttpHandler to use HttpClientHandler. " +
+                "Note that HttpClientHandler isn't compatible with load balancing.");
+        }
+
+        return new HttpHandlerContext(HttpHandlerType.SocketsHttpHandler, socketsHttpHandler.ConnectTimeout, GetConnectionIdleTimeout(socketsHttpHandler));
+
         static TimeSpan? GetConnectionIdleTimeout(SocketsHttpHandler socketsHttpHandler)
         {
             // Check if either TimeSpan is InfiniteTimeSpan, and return the other one.
@@ -358,13 +375,9 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
                 ? socketsHttpHandler.PooledConnectionIdleTimeout
                 : socketsHttpHandler.PooledConnectionLifetime;
         }
-#endif
     }
 
-#if NET5_0_OR_GREATER
-    private static readonly Uri HttpLoadBalancerTemporaryUri = new Uri("http://loadbalancer.temporary.invalid");
-    private static readonly Uri HttpsLoadBalancerTemporaryUri = new Uri("https://loadbalancer.temporary.invalid");
-
+    [UnsupportedOSPlatform("browser")]
     private static bool IsProxied(SocketsHttpHandler socketsHttpHandler, Uri address, bool isSecure)
     {
         // Check standard address directly.
@@ -431,11 +444,16 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
 
         // Either the HTTP transport was configured with HttpClient, or SocketsHttpHandler.ConnectCallback is set.
         // We don't know how HTTP requests will be sent so we throw an error.
+        //
+        // The nameof(SocketsHttpHandler) references below are only used for the exception message and
+        // don't require the type to be usable on the current platform, so this is safe to reach on browser.
+#pragma warning disable CA1416 // SocketsHttpHandler is unsupported on browser
         throw new InvalidOperationException(
             $"Channel is configured with an HTTP transport doesn't support client-side load balancing or connectivity state tracking. " +
             $"The underlying HTTP transport must be a {nameof(SocketsHttpHandler)} with no " +
             $"{nameof(SocketsHttpHandler)}.{nameof(SocketsHttpHandler.ConnectCallback)} configured. " +
             $"The HTTP transport must be configured on the channel using {nameof(GrpcChannelOptions)}.{nameof(GrpcChannelOptions.HttpHandler)}.");
+#pragma warning restore CA1416
     }
 
     private LoadBalancerFactory[] ResolveLoadBalancerFactories(GrpcChannelOptions channelOptions)
@@ -535,10 +553,14 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
 
         if (HttpHandlerType == HttpHandlerType.SocketsHttpHandler)
         {
+            // HttpHandlerType.SocketsHttpHandler can only be set after confirming a live SocketsHttpHandler
+            // instance exists, which is only possible on platforms where the type is supported.
+#pragma warning disable CA1416 // SocketsHttpHandler is unsupported on browser
             var socketsHttpHandler = HttpRequestHelpers.GetHttpHandlerType<SocketsHttpHandler>(handler);
             CompatibilityHelpers.Assert(socketsHttpHandler != null, "Should have handler with this handler type.");
 
             BalancerHttpHandler.ConfigureSocketsHttpHandlerSetup(socketsHttpHandler, balancerHttpHandler.OnConnect);
+#pragma warning restore CA1416
         }
 #endif
 
@@ -881,6 +903,10 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
         {
             if (_channel.HttpHandlerType == HttpHandlerType.SocketsHttpHandler)
             {
+                // HttpHandlerType.SocketsHttpHandler can only be set after confirming a live SocketsHttpHandler
+                // instance exists, which is only possible on platforms where raw sockets (and SocketsHttpHandler
+                // itself) are supported, so SocketConnectivitySubchannelTransport is never reached on browser.
+#pragma warning disable CA1416 // SocketConnectivitySubchannelTransport is unsupported on browser
                 return new SocketConnectivitySubchannelTransport(
                     subchannel,
                     SocketConnectivitySubchannelTransport.SocketPingInterval,
@@ -888,6 +914,7 @@ public sealed partial class GrpcChannel : ChannelBase, IDisposable
                     _channel.ConnectionIdleTimeout ?? TimeSpan.FromMinutes(1),
                     _channel.LoggerFactory,
                     socketConnect: null);
+#pragma warning restore CA1416
             }
 
             return new PassiveSubchannelTransport(subchannel);

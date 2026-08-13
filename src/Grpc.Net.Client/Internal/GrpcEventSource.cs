@@ -141,12 +141,19 @@ internal sealed class GrpcEventSource : EventSource
 
     protected override void OnEventCommand(EventCommandEventArgs command)
     {
-        if (command.Command == EventCommand.Enable)
+        // PollingCounter isn't supported in the browser (it relies on a background polling timer).
+        // Skip creating counters there instead of letting the runtime throw from inside PollingCounter.
+        //
+        // The IsBrowser check below uses this project's testable OperatingSystem wrapper rather than
+        // System.OperatingSystem.IsBrowser() directly, so the platform analyzer can't recognize it as
+        // a guard - suppress CA1416 here since the guard is real, just not analyzer-visible.
+        if (command.Command == EventCommand.Enable && !OperatingSystem.Instance.IsBrowser)
         {
             // This is the convention for initializing counters in the RuntimeEventSource (lazily on the first enable command).
             // They aren't disabled afterwards...
 
 #if !NETSTANDARD2_0 && !NET462
+#pragma warning disable CA1416 // PollingCounter is unsupported on browser; guarded above
             _totalCallsCounter ??= new PollingCounter("total-calls", this, () => Volatile.Read(ref _totalCalls))
             {
                 DisplayName = "Total Calls",
@@ -171,6 +178,7 @@ internal sealed class GrpcEventSource : EventSource
             {
                 DisplayName = "Total Messages Received",
             };
+#pragma warning restore CA1416
 #endif
         }
     }

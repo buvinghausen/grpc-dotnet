@@ -20,6 +20,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using Grpc.Core;
 using Grpc.Shared;
 using Microsoft.Extensions.Logging;
@@ -39,6 +40,9 @@ namespace Grpc.Net.Client.Balancer.Internal;
 /// 2. Transport supports multiple addresses. When connecting it will iterate through the addresses,
 ///    attempting to connect to each one.
 /// </summary>
+// Raw sockets (and SocketsHttpHandler, the only handler this transport is created for - see
+// GrpcChannel.SubChannelTransportFactory.Create) are unsupported on browser.
+[UnsupportedOSPlatform("browser")]
 internal sealed class SocketConnectivitySubchannelTransport : ISubchannelTransport, IDisposable
 {
     private const int MaximumInitialSocketDataSize = 1024 * 16;

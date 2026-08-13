@@ -93,9 +93,20 @@ internal sealed class DnsResolver : PollingResolver
                 throw new InvalidOperationException($"Resolver address '{_originalAddress}' is not valid. Please use dns:/// for DNS provider.");
             }
 
+            // Dns.GetHostAddressesAsync isn't supported in the browser. Fail with a clear, specific
+            // error instead of letting the runtime throw PlatformNotSupportedException from inside it.
+            // This file only compiles under SUPPORT_LOAD_BALANCING (net8.0+), so the BCL guard method
+            // is always available and the platform analyzer recognizes it without needing a suppression.
+            if (System.OperatingSystem.IsBrowser())
+            {
+                throw new PlatformNotSupportedException(
+                    $"DNS resolution using the 'dns:///' scheme isn't supported in the browser. " +
+                    "Use a static address, or configure a custom resolver, instead.");
+            }
+
             DnsResolverLog.StartingDnsQuery(_logger, _dnsAddress);
             var addresses =
-#if NET6_0_OR_GREATER                    
+#if NET6_0_OR_GREATER
                 await Dns.GetHostAddressesAsync(_dnsAddress, cancellationToken).ConfigureAwait(false);
 #else
                 await Dns.GetHostAddressesAsync(_dnsAddress).ConfigureAwait(false);

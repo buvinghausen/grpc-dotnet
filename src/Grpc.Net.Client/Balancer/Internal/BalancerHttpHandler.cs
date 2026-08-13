@@ -19,6 +19,7 @@
 #if SUPPORT_LOAD_BALANCING
 using System.Diagnostics;
 using System.Net;
+using System.Runtime.Versioning;
 using Grpc.Shared;
 using Microsoft.Extensions.Logging;
 
@@ -43,6 +44,10 @@ internal sealed partial class BalancerHttpHandler : DelegatingHandler
         _logger = manager.LoggerFactory.CreateLogger(typeof(BalancerHttpHandler));
     }
 
+    // SocketsHttpHandler itself is unsupported on browser. Callers only reach these methods after
+    // confirming (via a runtime type check) that they hold a live SocketsHttpHandler instance,
+    // which is only possible on platforms where the type is supported.
+    [UnsupportedOSPlatform("browser")]
     internal static bool IsSocketsHttpHandlerSetup(SocketsHttpHandler socketsHttpHandler)
     {
         lock (SetupLock)
@@ -53,6 +58,7 @@ internal sealed partial class BalancerHttpHandler : DelegatingHandler
         }
     }
 
+    [UnsupportedOSPlatform("browser")]
     internal static void ConfigureSocketsHttpHandlerSetup(
         SocketsHttpHandler socketsHttpHandler,
         Func<SocketsHttpConnectionContext, CancellationToken, ValueTask<Stream>> connectCallback)

@@ -23,4 +23,9 @@
     <PackageReference Include="System.Memory" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- gRPC-Web is a browser-only transport; it isn't intended for MAUI (Android/iOS/Mac Catalyst/Windows) apps. -->
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
 </Project>
